@@ -1,0 +1,17 @@
+# IDE
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Game files
+snapshots/
+leaderboard.json
+tempCodeRunnerFile.py

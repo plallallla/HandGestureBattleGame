@@ -263,6 +263,15 @@ class HandGestureBattleGame:
         self.state = "START"
         self.ready_start_time = 0
 
+        # Load gesture images
+        self.gesture_images = {
+            "rock": pygame.image.load("Game assets/rock.png"),
+            "paper": pygame.image.load("Game assets/paper.png"),
+            "scissors": pygame.image.load("Game assets/scissors.png")
+        }
+        for img in self.gesture_images.values():
+            img.set_colorkey((255, 255, 255))
+
 
     # -------------
     # Leaderboard
@@ -619,16 +628,32 @@ class HandGestureBattleGame:
         text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
         self.screen.blit(text, text_rect)
 
+    def draw_gesture_icon(self, surface, gesture, center_x, center_y, size, bg_color):
+        cx, cy = int(center_x), int(center_y)
+        radius = size // 2 - 5
+        
+        pygame.draw.circle(surface, bg_color, (cx, cy), radius)
+        pygame.draw.circle(surface, (255, 255, 255), (cx, cy), radius, 3)
+        
+        if gesture in self.gesture_images:
+            img = pygame.transform.scale(self.gesture_images[gesture], (size - 10, size - 10))
+            img_rect = img.get_rect(center=(cx, cy))
+            surface.blit(img, img_rect)
+
     def draw_icons(self):
         """
         Draw icons (enemy gestures) on top of the camera feed.
-        Each icon is a colored rectangle with the gesture text inside.
+        Each icon shows a hand gesture symbol.
         """
         for icon in self.icons:
-            pygame.draw.rect(self.screen, icon.color, icon.rect, border_radius=10)
-            text = self.font.render(icon.gesture.capitalize(), True, (0, 0, 0))
-            text_rect = text.get_rect(center=icon.rect.center)
-            self.screen.blit(text, text_rect)
+            self.draw_gesture_icon(
+                self.screen, 
+                icon.gesture, 
+                icon.rect.centerx, 
+                icon.rect.centery, 
+                ICON_SIZE,
+                icon.color
+            )
 
     def draw_hud(self):
         """
