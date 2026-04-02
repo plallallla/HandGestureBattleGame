@@ -56,6 +56,58 @@ class GestureDetector:
 
         # 连续3帧一样的手势才算稳定，避免误判
         self.history = {"Left": [], "Right": []}
+        self.finger_count_history = []
+
+    def count_fingers(self, lm_list):
+        """
+        计算伸出的手指数量（包括拇指）
+        返回: 0-5
+        """
+        def is_finger_open(tip_id, pip_id):
+            return lm_list[tip_id].y < lm_list[pip_id].y
+        
+        def is_thumb_open():
+            # 拇指判断：比较x坐标（横向伸展）
+            # 指尖比IP更靠外则认为伸直
+            return lm_list[4].x < lm_list[3].x
+        
+        thumb_open = is_thumb_open()
+        index_open = is_finger_open(8, 6)
+        middle_open = is_finger_open(12, 10)
+        ring_open = is_finger_open(16, 14)
+        pinky_open = is_finger_open(20, 18)
+        
+        return sum([thumb_open, index_open, middle_open, ring_open, pinky_open])
+
+    def detect_finger_count(self, frame_rgb, image_width, image_height):
+        """
+        检测一只手的手指数量（用于数学游戏）
+        返回: {'finger_count': int}
+        """
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+        self._timestamp_ms += int(1000 / 30)
+        result = self.detector.detect_for_video(mp_image, self._timestamp_ms)
+        
+        if not result.hand_landmarks:
+            self.finger_count_history = []
+            return {"finger_count": 0}
+        
+        # 只检测第一只手
+        lm_list = result.hand_landmarks[0]
+        raw_count = self.count_fingers(lm_list)
+        
+        self.finger_count_history.append(raw_count)
+        if len(self.finger_count_history) > 3:
+            self.finger_count_history.pop(0)
+        
+        confirmed_count = 0
+        if len(self.finger_count_history) == 3:
+            if self.finger_count_history[0] == \
+               self.finger_count_history[1] == \
+               self.finger_count_history[2]:
+                confirmed_count = self.finger_count_history[0]
+        
+        return {"finger_count": confirmed_count}
 
     def detect(self, frame_rgb, image_width, image_height):
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
@@ -82,6 +134,7 @@ class GestureDetector:
 
             # 3. 只有连续 3 帧相同才返回该手势
             confirmed_gesture = "none"
+            quadrant = "None"
             if len(self.history[handed_label]) == 3:
                 if (self.history[handed_label][0] == self.history[handed_label][1] == self.history[handed_label][2] and self.history[handed_label][0] != "none"):
                     confirmed_gesture = self.history[handed_label][0]
@@ -260,9 +313,10 @@ class HandGestureBattleGame:
 
 
         # 新增： 记录进入 READY 状态的时间
-        self.state = "START"
+        self.state = "MODE_SELECT"
+        self.game_mode = 1
         self.ready_start_time = 0
-
+        
         # Load gesture images
         self.gesture_images = {
             "rock": pygame.image.load("Game assets/rock.png"),
@@ -270,6 +324,47 @@ class HandGestureBattleGame:
             "scissors": pygame.image.load("Game assets/scissors.png")
         }
         for img in self.gesture_images.values():
+            img.set_colorkey((255, 255, 255))
+        
+        # Math game variables
+        self.math_question_num = 0
+        self.math_total_questions = 10
+        self.math_correct_count = 0
+        self.math_question = ""
+        self.math_answer = 0
+        self.math_question_time = 0
+        self.math_time_limit = 10.0
+        self.math_finger_count = 0
+        self.math_waiting_reset = False  # 需要手势复位才能读下一个答案
+        
+        # Fruit memory game variables
+        self.fruit_question_num = 0
+        self.fruit_max_questions = 9  # 上限为9题
+        self.fruit_correct_count = 0
+        self.fruit_consecutive_correct = 0  # 连续正确次数
+        self.fruit_num_types = 2  # 当前水果种类数
+        self.fruit_display_time = 5.0
+        self.fruit_answer_time = 10.0
+        self.fruit_types = ["Apple", "Banana"]
+        self.fruit_positions = []
+        self.fruit_counts = {}
+        self.fruit_target = ""
+        self.fruit_answer = 0
+        self.fruit_question_time = 0
+        self.fruit_finger_count = 0
+        self.fruit_waiting_reset = False  # 需要手势复位才能读下一个答案
+        self.fruit_game_over = False  # 游戏是否结束（失败）
+        
+        # Load fruit images
+        self.fruit_images = {
+            "Apple": pygame.image.load("Game assets/Apple.png"),
+            "Banana": pygame.image.load("Game assets/Banana.png"),
+            "Grapes": pygame.image.load("Game assets/Grapes.png"),
+            "Mango": pygame.image.load("Game assets/Mango.png"),
+            "Pineapple": pygame.image.load("Game assets/Pineapple.png"),
+            "Watermelon": pygame.image.load("Game assets/Watermelon.png")
+        }
+        for img in self.fruit_images.values():
             img.set_colorkey((255, 255, 255))
 
 
@@ -387,13 +482,31 @@ class HandGestureBattleGame:
     # -------------
 
     def reset_game(self):
-        self.state = "START"
+        self.state = "MODE_SELECT"
+        self.game_mode = 1
         self.hp = HP_MAX
         self.score = 0
         self.icons = []
         self.last_spawn_time = 0.0
         self.snapshot_surface = None
         self.snapshot_file = None
+        self.math_question_num = 0
+        self.math_correct_count = 0
+        self.math_question = ""
+        self.math_answer = 0
+        self.math_finger_count = 0
+        self.math_waiting_reset = False
+        self.fruit_question_num = 0
+        self.fruit_correct_count = 0
+        self.fruit_consecutive_correct = 0
+        self.fruit_num_types = 2
+        self.fruit_positions = []
+        self.fruit_counts = {}
+        self.fruit_target = ""
+        self.fruit_answer = 0
+        self.fruit_finger_count = 0
+        self.fruit_waiting_reset = False
+        self.fruit_game_over = False
 
     def trigger_game_over(self, frame_bgr):
         """
@@ -431,50 +544,76 @@ class HandGestureBattleGame:
     def run(self):
         while self.running:
             self.clock.tick(FPS)
-            self.frame_count += 1 # 计数增加
-            # Handle events
+            self.frame_count += 1
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        self.running = FalseS
-                    # Restart from GAME_OVER with SPACE
+                        self.running = False
+                    elif event.key == pygame.K_a:
+                        self.state = "DEBUG"
+                    elif self.state == "MODE_SELECT":
+                        if event.key == pygame.K_1:
+                            self.game_mode = 1
+                            self.state = "START"
+                        elif event.key == pygame.K_2:
+                            self.game_mode = 2
+                            self.state = "MATH_START"
+                        elif event.key == pygame.K_3:
+                            self.game_mode = 3
+                            self.state = "FRUIT_START"
+                    elif self.state == "DEBUG":
+                        if event.key == pygame.K_SPACE:
+                            self.state = "MODE_SELECT"
                     elif self.state == "GAME_OVER" and event.key == pygame.K_SPACE:
                         self.reset_game()
 
-            # Capture frame from camera
             ret, frame_bgr = self.cap.read()
             if not ret:
                 print("Failed to read from camera.")
                 break
 
-            # Mirror image horizontally for natural interaction
             frame_bgr = cv2.flip(frame_bgr, 1)
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-            # --- 修改：只在每 3 帧进行一次手势检测 ---
             hands_info = []
-            if self.state in ("START", "RUNNING"):
-                if self.frame_count % 3 == 0:  # 只有当计数是3的倍数时才检测
+            if self.state in ("START", "RUNNING", "DEBUG"):
+                if self.frame_count % 3 == 0:
                     hands_info = self.detector.detect(frame_rgb, WINDOW_WIDTH, WINDOW_HEIGHT)
-                    self.last_hands_info = hands_info # 更新缓存
+                    self.last_hands_info = hands_info
                 else:
-                    hands_info = self.last_hands_info # 使用上一帧的结果
-            # ----------------------------------------
+                    hands_info = self.last_hands_info
+            
+            finger_info = None
+            if self.state in ("MATH_READY", "MATH_RUNNING", "FRUIT_QUESTION", "DEBUG"):
+                if self.frame_count % 3 == 0:
+                    finger_info = self.detector.detect_finger_count(frame_rgb, WINDOW_WIDTH, WINDOW_HEIGHT)
+                    if finger_info:
+                        self.math_finger_count = finger_info["finger_count"]
+                        self.fruit_finger_count = finger_info["finger_count"]
 
-            # Update game logic per state
             if self.state == "START":
                 self.update_start_state(hands_info)
-            elif self.state == "READY":       # 新增
-                self.update_ready_state()     # 新增
+            elif self.state == "READY":
+                self.update_ready_state()
             elif self.state == "RUNNING":
                 self.update_running_state(hands_info, frame_bgr)
+            elif self.state == "MATH_START":
+                self.update_math_start_state()
+            elif self.state == "MATH_READY":
+                self.update_math_ready_state()
+            elif self.state == "MATH_RUNNING":
+                self.update_math_running_state(frame_bgr)
+            elif self.state == "FRUIT_START":
+                self.update_fruit_start_state()
+            elif self.state == "FRUIT_DISPLAY":
+                self.update_fruit_display_state()
+            elif self.state == "FRUIT_QUESTION":
+                self.update_fruit_question_state(frame_bgr)
 
-            # Render current state
             self.render(frame_rgb)
 
-        # Cleanup
         self.cap.release()
         pygame.quit()
         sys.exit()
@@ -580,19 +719,187 @@ class HandGestureBattleGame:
             if is_left and not is_top: return "Bottom-Left"
             return "Bottom-Right"
 
+    def generate_math_question(self):
+        """生成简单的加减法题目，答案在0-5范围内"""
+        answer = random.randint(0, 5)
+        operation = random.choice(['+', '-'])
+        
+        if answer == 0:
+            a = random.randint(0, 5)
+            b = a
+            self.math_question = f"{a} - {b} = ?"
+        elif operation == '+':
+            a = random.randint(0, answer)
+            b = answer - a
+            self.math_question = f"{a} + {b} = ?"
+        else:
+            a = answer + random.randint(0, 5 - answer)
+            b = a - answer
+            self.math_question = f"{a} - {b} = ?"
+        
+        self.math_answer = answer
 
-    # ...后续逻辑
+    def update_math_start_state(self):
+        """数学游戏开始状态"""
+        self.math_question_num = 0
+        self.math_correct_count = 0
+        self.generate_math_question()
+        self.math_question_time = time.time()
+        self.state = "MATH_READY"
+        self.ready_start_time = time.time()
+
+    def update_math_ready_state(self):
+        """数学游戏准备状态"""
+        if time.time() - self.ready_start_time >= 1.5:
+            self.state = "MATH_RUNNING"
+            self.math_question_time = time.time()
+
+    def update_math_running_state(self, frame_bgr):
+        """数学游戏运行状态"""
+        now = time.time()
+        
+        # 检查手势复位
+        if self.math_waiting_reset:
+            if self.math_finger_count == 0:
+                self.math_waiting_reset = False
+                print("Gesture reset, ready for next answer")
+            return
+        
+        # 检查答案
+        if self.math_finger_count == self.math_answer and self.math_finger_count > 0:
+            self.math_correct_count += 1
+            print(f"Correct! Answer: {self.math_answer}")
+            self.math_question_num += 1
+            self.math_waiting_reset = True  # 需要手势复位
+            
+            if self.math_question_num >= self.math_total_questions:
+                self.score = self.math_correct_count
+                self.trigger_game_over(frame_bgr)
+            else:
+                self.generate_math_question()
+                self.math_question_time = time.time()
+        
+        elif now - self.math_question_time > self.math_time_limit:
+            print(f"Timeout! Answer was: {self.math_answer}")
+            self.math_question_num += 1
+            
+            if self.math_question_num >= self.math_total_questions:
+                self.score = self.math_correct_count
+                self.trigger_game_over(frame_bgr)
+            else:
+                self.generate_math_question()
+                self.math_question_time = time.time()
+                self.math_waiting_reset = False
+
+    def generate_fruit_question(self):
+        """生成水果记忆游戏的问题"""
+        # 根据难度选择水果种类数
+        available_fruits = ["Apple", "Banana", "Grapes", "Mango", "Pineapple", "Watermelon"]
+        num_types = min(self.fruit_num_types, len(available_fruits))
+        self.fruit_types = random.sample(available_fruits, num_types)
+        
+        # 随机生成每种水果的数量（0-5），至少有一种水果数量>0
+        self.fruit_counts = {}
+        self.fruit_positions = []
+        
+        # 确保至少有一个水果
+        guaranteed_fruit = random.choice(self.fruit_types)
+        guaranteed_count = random.randint(1, 5)
+        self.fruit_counts[guaranteed_fruit] = guaranteed_count
+        
+        for _ in range(guaranteed_count):
+            x = random.randint(80, WINDOW_WIDTH - 80)
+            y = random.randint(100, WINDOW_HEIGHT - 100)
+            self.fruit_positions.append({"fruit": guaranteed_fruit, "x": x, "y": y})
+        
+        # 其他水果可以是0-5
+        for fruit in self.fruit_types:
+            if fruit == guaranteed_fruit:
+                continue
+            count = random.randint(0, 5)
+            self.fruit_counts[fruit] = count
+            
+            for _ in range(count):
+                x = random.randint(80, WINDOW_WIDTH - 80)
+                y = random.randint(100, WINDOW_HEIGHT - 100)
+                self.fruit_positions.append({"fruit": fruit, "x": x, "y": y})
+        
+        # 随机选择要问的水果（可以问数量为0的水果）
+        self.fruit_target = random.choice(self.fruit_types)
+        self.fruit_answer = self.fruit_counts[self.fruit_target]
+
+    def update_fruit_start_state(self):
+        """水果记忆游戏开始状态"""
+        self.fruit_question_num = 0
+        self.fruit_correct_count = 0
+        self.fruit_consecutive_correct = 0
+        self.fruit_num_types = 2
+        self.fruit_game_over = False
+        self.generate_fruit_question()
+        self.fruit_question_time = time.time()
+        self.state = "FRUIT_DISPLAY"
+
+    def update_fruit_display_state(self):
+        """水果显示状态"""
+        if time.time() - self.fruit_question_time >= self.fruit_display_time:
+            self.state = "FRUIT_QUESTION"
+            self.fruit_question_time = time.time()
+
+    def update_fruit_question_state(self, frame_bgr):
+        """水果问题回答状态"""
+        now = time.time()
+        
+        # 检查手势复位
+        if self.fruit_waiting_reset:
+            if self.fruit_finger_count == 0:
+                self.fruit_waiting_reset = False
+                print("Gesture reset, ready for next answer")
+            return
+        
+        # 检查答案（答案可以是0）
+        if self.fruit_finger_count == self.fruit_answer:
+            self.fruit_correct_count += 1
+            self.fruit_consecutive_correct += 1
+            print(f"Correct! There are {self.fruit_answer} {self.fruit_target}s")
+            self.fruit_question_num += 1
+            self.fruit_waiting_reset = True  # 需要手势复位
+            
+            # 每3题正确增加一种水果
+            if self.fruit_consecutive_correct > 0 and self.fruit_consecutive_correct % 3 == 0:
+                if self.fruit_num_types < 6:
+                    self.fruit_num_types += 1
+                    print(f"Difficulty increased! Now {self.fruit_num_types} fruit types")
+            
+            # 检查是否达到上限
+            if self.fruit_question_num >= self.fruit_max_questions:
+                self.score = self.fruit_correct_count
+                self.trigger_game_over(frame_bgr)
+            else:
+                self.generate_fruit_question()
+                self.fruit_question_time = time.time()
+                self.state = "FRUIT_DISPLAY"
+        
+        elif now - self.fruit_question_time > self.fruit_answer_time:
+            # 超时即失败，游戏结束
+            print(f"Timeout! There were {self.fruit_answer} {self.fruit_target}s")
+            print("Game Over! One mistake and you're out.")
+            self.fruit_game_over = True
+            self.score = self.fruit_correct_count
+            self.trigger_game_over(frame_bgr)
+        
+        elif self.fruit_finger_count > 0 and self.fruit_finger_count != self.fruit_answer:
+            # 答错即失败，游戏结束
+            print(f"Wrong! There were {self.fruit_answer} {self.fruit_target}s, not {self.fruit_finger_count}")
+            print("Game Over! One mistake and you're out.")
+            self.fruit_game_over = True
+            self.score = self.fruit_correct_count
+            self.trigger_game_over(frame_bgr)
 
     # -------------
     # Rendering
     # -------------
 
     def render(self, frame_rgb):
-        """
-        Draw the camera feed + game overlay (icons, HP, score, etc.)
-        according to current state.
-        """
-        # Convert frame to Pygame surface
         frame_surface = pygame.image.frombuffer(
             frame_rgb.tobytes(),
             (WINDOW_WIDTH, WINDOW_HEIGHT),
@@ -601,15 +908,31 @@ class HandGestureBattleGame:
 
         self.screen.blit(frame_surface, (0, 0))
 
-        if self.state == "START":
+        if self.state == "MODE_SELECT":
+            self.draw_mode_select_overlay()
+        elif self.state == "DEBUG":
+            self.draw_debug_overlay()
+        elif self.state == "START":
             self.draw_hud()
             self.draw_start_overlay()
-        elif self.state == "READY":  # 新增
+        elif self.state == "READY":
             self.draw_hud()
             self.draw_ready_overlay()
         elif self.state == "RUNNING":
             self.draw_icons()
             self.draw_hud()
+        elif self.state == "MATH_START":
+            self.draw_math_start_overlay()
+        elif self.state == "MATH_READY":
+            self.draw_math_ready_overlay()
+        elif self.state == "MATH_RUNNING":
+            self.draw_math_game_ui()
+        elif self.state == "FRUIT_START":
+            self.draw_fruit_start_overlay()
+        elif self.state == "FRUIT_DISPLAY":
+            self.draw_fruit_display_ui()
+        elif self.state == "FRUIT_QUESTION":
+            self.draw_fruit_question_ui()
         elif self.state == "GAME_OVER":
             self.draw_game_over()
 
@@ -627,6 +950,244 @@ class HandGestureBattleGame:
         text = self.big_font.render(f"Get Ready: {countdown}", True, (255, 255, 0))
         text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
         self.screen.blit(text, text_rect)
+
+    def draw_mode_select_overlay(self):
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+        
+        title = self.big_font.render("Select Game Mode", True, (255, 255, 255))
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 100))
+        self.screen.blit(title, title_rect)
+        
+        mode1 = self.font.render("Press 1: Rock-Paper-Scissors Battle", True, (100, 255, 100))
+        mode1_rect = mode1.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 40))
+        self.screen.blit(mode1, mode1_rect)
+        
+        mode2 = self.font.render("Press 2: Math Finger Counting", True, (255, 200, 100))
+        mode2_rect = mode2.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+        self.screen.blit(mode2, mode2_rect)
+        
+        mode3 = self.font.render("Press 3: Fruit Memory Game", True, (100, 200, 255))
+        mode3_rect = mode3.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 40))
+        self.screen.blit(mode3, mode3_rect)
+        
+        hint = self.font.render("ESC to quit", True, (150, 150, 150))
+        hint_rect = hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 100))
+        self.screen.blit(hint, hint_rect)
+
+    def draw_debug_overlay(self):
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 80))
+        self.screen.blit(overlay, (0, 0))
+        
+        title = self.big_font.render("DEBUG MODE", True, (255, 255, 0))
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 30))
+        self.screen.blit(title, title_rect)
+        
+        hint = self.font.render("Press SPACE to exit", True, (150, 150, 150))
+        hint_rect = hint.get_rect(center=(WINDOW_WIDTH // 2, 60))
+        self.screen.blit(hint, hint_rect)
+        
+        y_offset = 100
+        
+        left_gesture = "none"
+        right_gesture = "none"
+        
+        for hand in self.last_hands_info:
+            if hand["handedness"] == "Left":
+                left_gesture = hand["gesture"]
+            elif hand["handedness"] == "Right":
+                right_gesture = hand["gesture"]
+        
+        left_text = self.font.render(f"Left Hand: {left_gesture}", True, (255, 100, 100))
+        left_rect = left_text.get_rect(center=(WINDOW_WIDTH // 2, y_offset))
+        self.screen.blit(left_text, left_rect)
+        
+        right_text = self.font.render(f"Right Hand: {right_gesture}", True, (100, 255, 100))
+        right_rect = right_text.get_rect(center=(WINDOW_WIDTH // 2, y_offset + 30))
+        self.screen.blit(right_text, right_rect)
+        
+        finger_y = y_offset + 70
+        finger_text = self.font.render(f"Finger Count: {self.math_finger_count}", True, (255, 255, 255))
+        finger_rect = finger_text.get_rect(center=(WINDOW_WIDTH // 2, finger_y))
+        self.screen.blit(finger_text, finger_rect)
+        
+        for hand in self.last_hands_info:
+            if hand["center"]:
+                cx, cy = hand["center"]
+                color = (255, 100, 100) if hand["handedness"] == "Left" else (100, 255, 100)
+                pygame.draw.circle(self.screen, color, (cx, cy), 20, 3)
+                label = self.font.render(hand["handedness"], True, color)
+                label_rect = label.get_rect(center=(cx, cy - 30))
+                self.screen.blit(label, label_rect)
+
+    def draw_math_start_overlay(self):
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+        
+        title = self.big_font.render("Math Finger Game", True, (255, 200, 100))
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 60))
+        self.screen.blit(title, title_rect)
+        
+        instr = self.font.render("Show finger count to answer", True, (255, 255, 255))
+        instr_rect = instr.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 20))
+        self.screen.blit(instr, instr_rect)
+        
+        instr2 = self.font.render("Answer range: 1-5", True, (255, 255, 255))
+        instr2_rect = instr2.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 10))
+        self.screen.blit(instr2, instr2_rect)
+        
+        instr3 = self.font.render("10 questions, 10 seconds each", True, (255, 255, 255))
+        instr3_rect = instr3.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 40))
+        self.screen.blit(instr3, instr3_rect)
+
+    def draw_math_ready_overlay(self):
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+        
+        elapsed = time.time() - self.ready_start_time
+        countdown = max(0, int(1.6 - elapsed))
+        
+        text = self.big_font.render(f"Starting in: {countdown}", True, (255, 255, 0))
+        text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+        self.screen.blit(text, text_rect)
+
+    def draw_math_game_ui(self):
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 100))
+        self.screen.blit(overlay, (0, 0))
+        
+        question = self.big_font.render(self.math_question, True, (255, 255, 255))
+        question_rect = question.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 60))
+        self.screen.blit(question, question_rect)
+        
+        progress = self.font.render(f"Question: {self.math_question_num + 1}/{self.math_total_questions}", True, (255, 255, 255))
+        progress_rect = progress.get_rect(center=(WINDOW_WIDTH // 2, 30))
+        self.screen.blit(progress, progress_rect)
+        
+        correct = self.font.render(f"Correct: {self.math_correct_count}", True, (100, 255, 100))
+        correct_rect = correct.get_rect(center=(WINDOW_WIDTH // 2, 60))
+        self.screen.blit(correct, correct_rect)
+        
+        elapsed = time.time() - self.math_question_time
+        remaining = max(0, int(self.math_time_limit - elapsed))
+        timer = self.font.render(f"Time: {remaining}s", True, (255, 200, 100) if remaining > 3 else (255, 50, 50))
+        timer_rect = timer.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 30))
+        self.screen.blit(timer, timer_rect)
+        
+        finger_text = self.font.render(f"Fingers: {self.math_finger_count}", True, (255, 255, 255))
+        finger_rect = finger_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 20))
+        self.screen.blit(finger_text, finger_rect)
+        
+        # 显示复位提示
+        if self.math_waiting_reset:
+            reset_hint = self.font.render("Put your hand down to continue", True, (255, 255, 0))
+            reset_rect = reset_hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 60))
+            self.screen.blit(reset_hint, reset_rect)
+
+    def draw_fruit_start_overlay(self):
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+        
+        title = self.big_font.render("Fruit Memory Game", True, (255, 200, 100))
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 100))
+        self.screen.blit(title, title_rect)
+        
+        instr1 = self.font.render("Memorize the number of each fruit", True, (255, 255, 255))
+        instr1_rect = instr1.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 50))
+        self.screen.blit(instr1, instr1_rect)
+        
+        instr2 = self.font.render("Answer can be 0-5", True, (255, 255, 255))
+        instr2_rect = instr2.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 20))
+        self.screen.blit(instr2, instr2_rect)
+        
+        instr3 = self.font.render("One mistake = Game Over!", True, (255, 100, 100))
+        instr3_rect = instr3.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 10))
+        self.screen.blit(instr3, instr3_rect)
+        
+        instr4 = self.font.render("Every 3 correct = More fruit types", True, (255, 255, 0))
+        instr4_rect = instr4.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 40))
+        self.screen.blit(instr4, instr4_rect)
+        
+        instr5 = self.font.render("Max 9 questions, memorize for 5 seconds", True, (255, 255, 255))
+        instr5_rect = instr5.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 70))
+        self.screen.blit(instr5, instr5_rect)
+        
+        start = self.font.render("Starting...", True, (255, 255, 0))
+        start_rect = start.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 110))
+        self.screen.blit(start, start_rect)
+
+    def draw_fruit_display_ui(self):
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 50))
+        self.screen.blit(overlay, (0, 0))
+        
+        progress = self.font.render(f"Question: {self.fruit_question_num + 1}/{self.fruit_max_questions}", True, (255, 255, 255))
+        progress_rect = progress.get_rect(center=(WINDOW_WIDTH // 2, 30))
+        self.screen.blit(progress, progress_rect)
+        
+        correct = self.font.render(f"Correct: {self.fruit_correct_count}", True, (100, 255, 100))
+        correct_rect = correct.get_rect(center=(WINDOW_WIDTH // 2, 60))
+        self.screen.blit(correct, correct_rect)
+        
+        difficulty = self.font.render(f"Fruit Types: {self.fruit_num_types}", True, (255, 200, 100))
+        difficulty_rect = difficulty.get_rect(center=(WINDOW_WIDTH // 2, 90))
+        self.screen.blit(difficulty, difficulty_rect)
+        
+        elapsed = time.time() - self.fruit_question_time
+        remaining = max(0, int(self.fruit_display_time - elapsed))
+        timer = self.font.render(f"Memorize: {remaining}s", True, (255, 255, 0))
+        timer_rect = timer.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 30))
+        self.screen.blit(timer, timer_rect)
+        
+        fruit_size = 60
+        for item in self.fruit_positions:
+            fruit_img = self.fruit_images[item["fruit"]]
+            scaled_img = pygame.transform.scale(fruit_img, (fruit_size, fruit_size))
+            img_rect = scaled_img.get_rect(center=(item["x"], item["y"]))
+            self.screen.blit(scaled_img, img_rect)
+
+    def draw_fruit_question_ui(self):
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 100))
+        self.screen.blit(overlay, (0, 0))
+        
+        progress = self.font.render(f"Question: {self.fruit_question_num + 1}/{self.fruit_max_questions}", True, (255, 255, 255))
+        progress_rect = progress.get_rect(center=(WINDOW_WIDTH // 2, 30))
+        self.screen.blit(progress, progress_rect)
+        
+        correct = self.font.render(f"Correct: {self.fruit_correct_count}", True, (100, 255, 100))
+        correct_rect = correct.get_rect(center=(WINDOW_WIDTH // 2, 60))
+        self.screen.blit(correct, correct_rect)
+        
+        difficulty = self.font.render(f"Fruit Types: {self.fruit_num_types}", True, (255, 200, 100))
+        difficulty_rect = difficulty.get_rect(center=(WINDOW_WIDTH // 2, 90))
+        self.screen.blit(difficulty, difficulty_rect)
+        
+        question_text = f"How many {self.fruit_target}s were there?"
+        question = self.big_font.render(question_text, True, (255, 255, 255))
+        question_rect = question.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 60))
+        self.screen.blit(question, question_rect)
+        
+        elapsed = time.time() - self.fruit_question_time
+        remaining = max(0, int(self.fruit_answer_time - elapsed))
+        timer = self.font.render(f"Time: {remaining}s", True, (255, 200, 100) if remaining > 3 else (255, 50, 50))
+        timer_rect = timer.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 30))
+        self.screen.blit(timer, timer_rect)
+        
+        finger_text = self.font.render(f"Fingers: {self.fruit_finger_count}", True, (255, 255, 255))
+        finger_rect = finger_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 20))
+        self.screen.blit(finger_text, finger_rect)
+        
+        # 显示复位提示
+        if self.fruit_waiting_reset:
+            reset_hint = self.font.render("Put your hand down to continue", True, (255, 255, 0))
+            reset_rect = reset_hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 60))
+            self.screen.blit(reset_hint, reset_rect)
 
     def draw_gesture_icon(self, surface, gesture, center_x, center_y, size, bg_color):
         cx, cy = int(center_x), int(center_y)
