@@ -318,6 +318,7 @@ class HandGestureBattleGame:
         self.state = "MODE_SELECT"
         self.game_mode = 1
         self.ready_start_time = 0
+        self.mode_select_waiting_reset = False  # 模式选择的手势复位标志
         
         # Load gesture images
         self.gesture_images = {
@@ -360,6 +361,8 @@ class HandGestureBattleGame:
         self.fruit_hand_up = False  # 是否检测到手
         self.fruit_waiting_reset = False  # 需要手势复位才能读下一个答案
         self.fruit_mode_select_time = 0  # 模式选择时间
+        self.fruit_mode_waiting_reset = False  # 水果模式选择的手势复位标志
+        self.mode_select_time = 0  # 模式选择开始时间
         
         # Load fruit images
         self.fruit_images = {
@@ -503,6 +506,8 @@ class HandGestureBattleGame:
         self.math_finger_count = 0
         self.math_hand_up = False
         self.math_waiting_reset = False
+        self.mode_select_waiting_reset = False
+        self.mode_select_time = 0
         self.fruit_game_mode = 1
         self.fruit_question_num = 0
         self.fruit_correct_count = 0
@@ -515,6 +520,7 @@ class HandGestureBattleGame:
         self.fruit_finger_count = 0
         self.fruit_hand_up = False
         self.fruit_waiting_reset = False
+        self.fruit_mode_waiting_reset = False
 
     def trigger_game_over(self, frame_bgr):
         """
@@ -562,16 +568,7 @@ class HandGestureBattleGame:
                     elif event.key == pygame.K_a:
                         self.state = "DEBUG"
                     elif self.state == "MODE_SELECT":
-                        if event.key == pygame.K_1:
-                            self.game_mode = 1
-                            self.state = "START"
-                        elif event.key == pygame.K_2:
-                            self.game_mode = 2
-                            self.state = "MATH_START"
-                        elif event.key == pygame.K_3:
-                            self.game_mode = 3
-                            self.state = "FRUIT_MODE_SELECT"
-                            self.fruit_mode_select_time = time.time()
+                        pass
                     elif self.state == "DEBUG":
                         if event.key == pygame.K_SPACE:
                             self.state = "MODE_SELECT"
@@ -595,7 +592,7 @@ class HandGestureBattleGame:
                     hands_info = self.last_hands_info
             
             finger_info = None
-            if self.state in ("MATH_READY", "MATH_RUNNING", "FRUIT_MODE_SELECT", "FRUIT_QUESTION", "DEBUG"):
+            if self.state in ("MODE_SELECT", "MATH_READY", "MATH_RUNNING", "FRUIT_MODE_SELECT", "FRUIT_QUESTION", "DEBUG"):
                 if self.frame_count % 3 == 0:
                     finger_info = self.detector.detect_finger_count(frame_rgb, WINDOW_WIDTH, WINDOW_HEIGHT)
                     if finger_info:
@@ -604,7 +601,9 @@ class HandGestureBattleGame:
                         self.math_finger_count = finger_info["finger_count"]
                         self.fruit_finger_count = finger_info["finger_count"]
 
-            if self.state == "START":
+            if self.state == "MODE_SELECT":
+                self.update_mode_select_state()
+            elif self.state == "START":
                 self.update_start_state(hands_info)
             elif self.state == "READY":
                 self.update_ready_state()
@@ -634,6 +633,32 @@ class HandGestureBattleGame:
     # -------------
     # State Updates
     # -------------
+    def update_mode_select_state(self):
+        """模式选择状态 - 使用手指数量选择游戏模式"""
+        if self.mode_select_time == 0:
+            self.mode_select_time = time.time()
+        
+        # 检查手势复位（手放下）
+        if self.mode_select_waiting_reset:
+            if not self.math_hand_up:
+                self.mode_select_waiting_reset = False
+                print("Mode select: Gesture reset, ready for selection")
+            return
+        
+        # 检查选择（必须检测到手才判断）
+        if self.math_hand_up and self.math_finger_count in [1, 2, 3]:
+            self.game_mode = self.math_finger_count
+            print(f"Selected: Mode {self.math_finger_count}")
+            self.mode_select_waiting_reset = True
+            
+            if self.math_finger_count == 1:
+                self.state = "START"
+            elif self.math_finger_count == 2:
+                self.state = "MATH_START"
+            elif self.math_finger_count == 3:
+                self.state = "FRUIT_MODE_SELECT"
+                self.fruit_mode_select_time = time.time()
+
     def update_start_state(self, hands_info):
         """
         START state: wait for the player to show SCISSORS gesture
@@ -792,6 +817,19 @@ class HandGestureBattleGame:
                 self.generate_math_question()
                 self.math_question_time = time.time()
         
+        elif self.math_hand_up and self.math_finger_count != self.math_answer:
+            # 错误答案：继续下一题
+            print(f"Wrong! Answer was: {self.math_answer}, you showed {self.math_finger_count}")
+            self.math_question_num += 1
+            
+            if self.math_question_num >= self.math_total_questions:
+                self.score = self.math_correct_count
+                self.trigger_game_over(frame_bgr)
+            else:
+                self.generate_math_question()
+                self.math_question_time = time.time()
+                self.math_waiting_reset = False
+        
         elif now - self.math_question_time > self.math_time_limit:
             print(f"Timeout! Answer was: {self.math_answer}")
             self.math_question_num += 1
@@ -806,14 +844,23 @@ class HandGestureBattleGame:
 
     def update_fruit_mode_select(self):
         """水果游戏模式选择状态"""
+        # 检查手势复位（手放下）
+        if self.fruit_mode_waiting_reset:
+            if not self.fruit_hand_up:
+                self.fruit_mode_waiting_reset = False
+                print("Fruit mode select: Gesture reset")
+            return
+        
         if self.fruit_hand_up:
             if self.fruit_finger_count == 1:
                 self.fruit_game_mode = 1  # 普通模式
                 print("Selected: Normal Mode (5 questions, 2 fruit types)")
+                self.fruit_mode_waiting_reset = True
                 self.state = "FRUIT_START"
             elif self.fruit_finger_count == 2:
                 self.fruit_game_mode = 2  # 挑战模式
                 print("Selected: Challenge Mode (Difficulty increases, one mistake = game over)")
+                self.fruit_mode_waiting_reset = True
                 self.state = "FRUIT_START"
 
     def generate_fruit_question(self):
@@ -914,8 +961,9 @@ class HandGestureBattleGame:
                 self.fruit_question_time = time.time()
                 self.state = "FRUIT_DISPLAY"
         
-        elif now - self.fruit_question_time > self.fruit_answer_time:
-            print(f"Timeout! There were {self.fruit_answer} {self.fruit_target}s")
+        elif self.fruit_hand_up and self.fruit_finger_count != self.fruit_answer:
+            # 错误答案：立即判断
+            print(f"Wrong! There were {self.fruit_answer} {self.fruit_target}s, not {self.fruit_finger_count}")
             
             if self.fruit_game_mode == 1:
                 # 普通模式：继续下一题
@@ -933,8 +981,8 @@ class HandGestureBattleGame:
                 self.score = self.fruit_correct_count
                 self.trigger_game_over(frame_bgr)
         
-        elif self.fruit_hand_up and self.fruit_finger_count != self.fruit_answer:
-            print(f"Wrong! There were {self.fruit_answer} {self.fruit_target}s, not {self.fruit_finger_count}")
+        elif now - self.fruit_question_time > self.fruit_answer_time:
+            print(f"Timeout! There were {self.fruit_answer} {self.fruit_target}s")
             
             if self.fruit_game_mode == 1:
                 # 普通模式：继续下一题
@@ -1019,20 +1067,32 @@ class HandGestureBattleGame:
         title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 100))
         self.screen.blit(title, title_rect)
         
-        mode1 = self.font.render("Press 1: Rock-Paper-Scissors Battle", True, (100, 255, 100))
+        mode1 = self.font.render("Show 1 finger: Rock-Paper-Scissors Battle", True, (100, 255, 100))
         mode1_rect = mode1.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 40))
         self.screen.blit(mode1, mode1_rect)
         
-        mode2 = self.font.render("Press 2: Math Finger Counting", True, (255, 200, 100))
+        mode2 = self.font.render("Show 2 fingers: Math Finger Counting", True, (255, 200, 100))
         mode2_rect = mode2.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
         self.screen.blit(mode2, mode2_rect)
         
-        mode3 = self.font.render("Press 3: Fruit Memory Game", True, (100, 200, 255))
+        mode3 = self.font.render("Show 3 fingers: Fruit Memory Game", True, (100, 200, 255))
         mode3_rect = mode3.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 40))
         self.screen.blit(mode3, mode3_rect)
         
+        if self.math_hand_up:
+            finger_text = self.font.render(f"Detected: {self.math_finger_count} finger(s)", True, (255, 255, 0))
+        else:
+            finger_text = self.font.render("Detected: Show your hand", True, (150, 150, 150))
+        finger_rect = finger_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 80))
+        self.screen.blit(finger_text, finger_rect)
+        
+        if self.mode_select_waiting_reset:
+            reset_hint = self.font.render("Put your hand down to confirm", True, (255, 255, 0))
+            reset_rect = reset_hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 110))
+            self.screen.blit(reset_hint, reset_rect)
+        
         hint = self.font.render("ESC to quit", True, (150, 150, 150))
-        hint_rect = hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 100))
+        hint_rect = hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 140))
         self.screen.blit(hint, hint_rect)
 
     def draw_debug_overlay(self):
