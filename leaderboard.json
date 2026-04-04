@@ -26,6 +26,11 @@
   },
   {
     "name": "Player",
+    "score": 10,
+    "snapshot": "snapshots/snapshot_1775303400.png"
+  },
+  {
+    "name": "Player",
     "score": 9,
     "snapshot": "snapshots/snapshot_1773490343.png"
   },
@@ -43,10 +48,5 @@
     "name": "Player",
     "score": 8,
     "snapshot": "snapshots/snapshot_1773490968.png"
-  },
-  {
-    "name": "Player",
-    "score": 7,
-    "snapshot": "snapshots/snapshot_1773491440.png"
   }
 ]

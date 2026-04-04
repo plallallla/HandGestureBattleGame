@@ -82,9 +82,10 @@ class GestureDetector:
     def detect_finger_count(self, frame_rgb, image_width, image_height):
         """
         检测一只手的手指数量（用于数学游戏）
-        返回: {'finger_count': int, 'hand_up_flag': bool}
+        返回: {'finger_count': int, 'hand_up_flag': bool, 'stable': bool}
         - hand_up_flag: True=检测到手, False=没有检测到手
         - finger_count: 0-5 (握拳为0，只有hand_up_flag=True时有效)
+        - stable: True=连续4帧相同，答案已稳定
         """
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
         self._timestamp_ms += int(1000 / 30)
@@ -92,24 +93,34 @@ class GestureDetector:
         
         if not result.hand_landmarks:
             self.finger_count_history = []
-            return {"finger_count": 0, "hand_up_flag": False}
+            return {"finger_count": 0, "hand_up_flag": False, "stable": False}
         
         # 只检测第一只手
         lm_list = result.hand_landmarks[0]
         raw_count = self.count_fingers(lm_list)
         
+        # 添加到历史记录
         self.finger_count_history.append(raw_count)
-        if len(self.finger_count_history) > 3:
+        if len(self.finger_count_history) > 4:
             self.finger_count_history.pop(0)
         
+        # 检查是否连续4帧相同
+        stable = False
         confirmed_count = 0
-        if len(self.finger_count_history) == 3:
-            if self.finger_count_history[0] == \
-               self.finger_count_history[1] == \
-               self.finger_count_history[2]:
+        if len(self.finger_count_history) == 4:
+            if (self.finger_count_history[0] == 
+                self.finger_count_history[1] == 
+                self.finger_count_history[2] == 
+                self.finger_count_history[3]):
                 confirmed_count = self.finger_count_history[0]
+                stable = True
         
-        return {"finger_count": confirmed_count, "hand_up_flag": True}
+        return {
+            "finger_count": confirmed_count, 
+            "hand_up_flag": True, 
+            "stable": stable,
+            "current_count": raw_count  # 当前帧检测到的数量（用于显示）
+        }
 
     def detect(self, frame_rgb, image_width, image_height):
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
@@ -340,6 +351,8 @@ class HandGestureBattleGame:
         self.math_finger_count = 0
         self.math_hand_up = False  # 是否检测到手
         self.math_waiting_reset = False  # 需要手势复位才能读下一个答案
+        self.math_finger_stable = False  # 手指数量是否稳定（连续4帧相同）
+        self.math_current_finger = 0  # 当前帧检测到的手指数
         
         # Fruit memory game variables
         self.fruit_game_mode = 1  # 1=普通模式, 2=挑战模式
@@ -600,6 +613,8 @@ class HandGestureBattleGame:
                         self.fruit_hand_up = finger_info["hand_up_flag"]
                         self.math_finger_count = finger_info["finger_count"]
                         self.fruit_finger_count = finger_info["finger_count"]
+                        self.math_finger_stable = finger_info.get("stable", False)
+                        self.math_current_finger = finger_info.get("current_count", finger_info["finger_count"])
 
             if self.state == "MODE_SELECT":
                 self.update_mode_select_state()
@@ -785,6 +800,7 @@ class HandGestureBattleGame:
         self.math_question_time = time.time()
         self.state = "MATH_READY"
         self.ready_start_time = time.time()
+        self.math_waiting_reset = True  # 强制要求先放下手
 
     def update_math_ready_state(self):
         """数学游戏准备状态"""
@@ -803,32 +819,34 @@ class HandGestureBattleGame:
                 print("Gesture reset, ready for next answer")
             return
         
-        # 检查答案（必须检测到手才判断）
-        if self.math_hand_up and self.math_finger_count == self.math_answer:
-            self.math_correct_count += 1
-            print(f"Correct! Answer: {self.math_answer}")
-            self.math_question_num += 1
-            self.math_waiting_reset = True  # 需要手势复位
+        # 只有当手指数量稳定（连续4帧相同）时才判断答案
+        if self.math_hand_up and self.math_finger_stable:
+            if self.math_finger_count == self.math_answer:
+                # 正确答案
+                self.math_correct_count += 1
+                print(f"Correct! Answer: {self.math_answer}")
+                self.math_question_num += 1
+                self.math_waiting_reset = True  # 需要手势复位
+                
+                if self.math_question_num >= self.math_total_questions:
+                    self.score = self.math_correct_count
+                    self.trigger_game_over(frame_bgr)
+                else:
+                    self.generate_math_question()
+                    self.math_question_time = time.time()
             
-            if self.math_question_num >= self.math_total_questions:
-                self.score = self.math_correct_count
-                self.trigger_game_over(frame_bgr)
             else:
-                self.generate_math_question()
-                self.math_question_time = time.time()
-        
-        elif self.math_hand_up and self.math_finger_count != self.math_answer:
-            # 错误答案：继续下一题
-            print(f"Wrong! Answer was: {self.math_answer}, you showed {self.math_finger_count}")
-            self.math_question_num += 1
-            
-            if self.math_question_num >= self.math_total_questions:
-                self.score = self.math_correct_count
-                self.trigger_game_over(frame_bgr)
-            else:
-                self.generate_math_question()
-                self.math_question_time = time.time()
-                self.math_waiting_reset = False
+                # 错误答案：继续下一题
+                print(f"Wrong! Answer was: {self.math_answer}, you showed {self.math_finger_count}")
+                self.math_question_num += 1
+                self.math_waiting_reset = True  # 需要手势复位
+                
+                if self.math_question_num >= self.math_total_questions:
+                    self.score = self.math_correct_count
+                    self.trigger_game_over(frame_bgr)
+                else:
+                    self.generate_math_question()
+                    self.math_question_time = time.time()
         
         elif now - self.math_question_time > self.math_time_limit:
             print(f"Timeout! Answer was: {self.math_answer}")
@@ -840,7 +858,7 @@ class HandGestureBattleGame:
             else:
                 self.generate_math_question()
                 self.math_question_time = time.time()
-                self.math_waiting_reset = False
+                self.math_waiting_reset = True  # 需要手势复位
 
     def update_fruit_mode_select(self):
         """水果游戏模式选择状态"""
@@ -913,7 +931,7 @@ class HandGestureBattleGame:
         self.fruit_correct_count = 0
         self.fruit_consecutive_correct = 0
         self.fruit_num_types = 2
-        self.fruit_waiting_reset = False
+        self.fruit_waiting_reset = True  # 强制要求先放下手
         self.generate_fruit_question()
         self.fruit_question_time = time.time()
         self.state = "FRUIT_DISPLAY"
@@ -923,6 +941,7 @@ class HandGestureBattleGame:
         if time.time() - self.fruit_question_time >= self.fruit_display_time:
             self.state = "FRUIT_QUESTION"
             self.fruit_question_time = time.time()
+            self.fruit_waiting_reset = True  # 强制要求先放下手
 
     def update_fruit_question_state(self, frame_bgr):
         """水果问题回答状态"""
@@ -1183,7 +1202,7 @@ class HandGestureBattleGame:
         self.screen.blit(overlay, (0, 0))
         
         question = self.big_font.render(self.math_question, True, (255, 255, 255))
-        question_rect = question.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 60))
+        question_rect = question.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 80))
         self.screen.blit(question, question_rect)
         
         progress = self.font.render(f"Question: {self.math_question_num + 1}/{self.math_total_questions}", True, (255, 255, 255))
@@ -1200,12 +1219,25 @@ class HandGestureBattleGame:
         timer_rect = timer.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 30))
         self.screen.blit(timer, timer_rect)
         
+        # 显示当前检测到的手指数和稳定状态
         if self.math_hand_up:
-            finger_text = self.font.render(f"Fingers: {self.math_finger_count}", True, (255, 255, 255))
+            if self.math_finger_stable:
+                # 稳定：显示绿色确认标记
+                finger_text = self.font.render(f"Fingers: {self.math_finger_count} ✓", True, (100, 255, 100))
+                stable_text = self.font.render("Confirmed!", True, (100, 255, 100))
+            else:
+                # 不稳定：显示当前检测到的数量（黄色）
+                finger_text = self.font.render(f"Detecting: {self.math_current_finger}", True, (255, 255, 0))
+                stable_text = self.font.render("Hold steady...", True, (255, 255, 0))
         else:
             finger_text = self.font.render("Fingers: Show your hand", True, (150, 150, 150))
-        finger_rect = finger_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 20))
+            stable_text = self.font.render("", True, (150, 150, 150))
+        
+        finger_rect = finger_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
         self.screen.blit(finger_text, finger_rect)
+        
+        stable_rect = stable_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 30))
+        self.screen.blit(stable_text, stable_rect)
         
         # 显示复位提示
         if self.math_waiting_reset:
