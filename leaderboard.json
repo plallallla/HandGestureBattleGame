@@ -1,52 +1,100 @@
-[
-  {
-    "name": "Player",
-    "score": 11,
-    "snapshot": "snapshots/snapshot_1773491160.png"
-  },
-  {
-    "name": "Player",
-    "score": 10,
-    "snapshot": "snapshots/snapshot_1775094588.png"
-  },
-  {
-    "name": "Player",
-    "score": 10,
-    "snapshot": "snapshots/snapshot_1775096234.png"
-  },
-  {
-    "name": "Player",
-    "score": 10,
-    "snapshot": "snapshots/snapshot_1775097060.png"
-  },
-  {
-    "name": "Player",
-    "score": 10,
-    "snapshot": "snapshots/snapshot_1775187001.png"
-  },
-  {
-    "name": "Player",
-    "score": 10,
-    "snapshot": "snapshots/snapshot_1775303400.png"
-  },
-  {
-    "name": "Player",
-    "score": 9,
-    "snapshot": "snapshots/snapshot_1773490343.png"
-  },
-  {
-    "name": "Player",
-    "score": 9,
-    "snapshot": "snapshots/snapshot_1773490395.png"
-  },
-  {
-    "name": "Player",
-    "score": 8,
-    "snapshot": "snapshots/snapshot_1773490002.png"
-  },
-  {
-    "name": "Player",
-    "score": 8,
-    "snapshot": "snapshots/snapshot_1773490968.png"
-  }
-]
+{
+  "Unknown": [
+    {
+      "name": "Player",
+      "score": 11,
+      "snapshot": "snapshots/snapshot_1773491160.png"
+    },
+    {
+      "name": "Player",
+      "score": 10,
+      "snapshot": "snapshots/snapshot_1775094588.png"
+    },
+    {
+      "name": "Player",
+      "score": 10,
+      "snapshot": "snapshots/snapshot_1775096234.png"
+    },
+    {
+      "name": "Player",
+      "score": 10,
+      "snapshot": "snapshots/snapshot_1775097060.png"
+    },
+    {
+      "name": "Player",
+      "score": 10,
+      "snapshot": "snapshots/snapshot_1775187001.png"
+    },
+    {
+      "name": "Player",
+      "score": 10,
+      "snapshot": "snapshots/snapshot_1775303400.png"
+    },
+    {
+      "name": "Player",
+      "score": 10,
+      "snapshot": "snapshots/snapshot_1775354450.png"
+    },
+    {
+      "name": "Player",
+      "score": 9,
+      "snapshot": "snapshots/snapshot_1773490343.png"
+    },
+    {
+      "name": "Player",
+      "score": 9,
+      "snapshot": "snapshots/snapshot_1773490395.png"
+    },
+    {
+      "name": "Player",
+      "score": 8,
+      "snapshot": "snapshots/snapshot_1773490002.png"
+    }
+  ],
+  "Math Game": [
+    {
+      "name": "Player",
+      "score": 10,
+      "snapshot": "snapshots/snapshot_1775354960.png"
+    },
+    {
+      "name": "Player",
+      "score": 10,
+      "snapshot": "snapshots/snapshot_1775355100.png"
+    },
+    {
+      "name": "Player",
+      "score": 9,
+      "snapshot": "snapshots/snapshot_1775355017.png"
+    }
+  ],
+  "Fruit Game (Normal)": [
+    {
+      "name": "Player",
+      "score": 5,
+      "snapshot": "snapshots/snapshot_1775355447.png"
+    },
+    {
+      "name": "Player",
+      "score": 5,
+      "snapshot": "snapshots/snapshot_1775355509.png"
+    }
+  ],
+  "Fruit Game (Challenge)": [
+    {
+      "name": "Player",
+      "score": 8,
+      "snapshot": "snapshots/snapshot_1775355619.png"
+    },
+    {
+      "name": "Player",
+      "score": 8,
+      "snapshot": "snapshots/snapshot_1775355758.png"
+    },
+    {
+      "name": "Player",
+      "score": 1,
+      "snapshot": "snapshots/snapshot_1775355669.png"
+    }
+  ]
+}

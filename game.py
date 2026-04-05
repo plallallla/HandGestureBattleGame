@@ -330,6 +330,7 @@ class HandGestureBattleGame:
         self.game_mode = 1
         self.ready_start_time = 0
         self.mode_select_waiting_reset = False  # 模式选择的手势复位标志
+        self.current_game_mode_name = ""  # 当前游戏模式名称
         
         # Load gesture images
         self.gesture_images = {
@@ -375,6 +376,8 @@ class HandGestureBattleGame:
         self.fruit_waiting_reset = False  # 需要手势复位才能读下一个答案
         self.fruit_mode_select_time = 0  # 模式选择时间
         self.fruit_mode_waiting_reset = False  # 水果模式选择的手势复位标志
+        self.fruit_finger_stable = False  # 手指数量是否稳定
+        self.fruit_current_finger = 0  # 当前帧检测到的手指数
         self.mode_select_time = 0  # 模式选择开始时间
         
         # Load fruit images
@@ -396,15 +399,19 @@ class HandGestureBattleGame:
 
     def load_leaderboard(self):
         if not os.path.exists(LEADERBOARD_FILE):
-            return []
+            return {}
         try:
             with open(LEADERBOARD_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                # 如果是旧格式（列表），转换为新格式（字典）
                 if isinstance(data, list):
+                    # 将旧数据迁移到"Unknown"模式
+                    return {"Unknown": data}
+                elif isinstance(data, dict):
                     return data
         except Exception:
             pass
-        return []
+        return {}
 
     def save_leaderboard(self):
         try:
@@ -413,16 +420,20 @@ class HandGestureBattleGame:
         except Exception:
             pass
 
-    def add_to_leaderboard(self, score, snapshot_file):
+    def add_to_leaderboard(self, score, snapshot_file, mode_name):
+        # 初始化该模式的排行榜
+        if mode_name not in self.leaderboard:
+            self.leaderboard[mode_name] = []
+        
         entry = {
             "name": "Player",
             "score": score,
             "snapshot": snapshot_file
         }
-        self.leaderboard.append(entry)
+        self.leaderboard[mode_name].append(entry)
         # Sort descending by score, keep top 10
-        self.leaderboard.sort(key=lambda e: e["score"], reverse=True)
-        self.leaderboard = self.leaderboard[:10]
+        self.leaderboard[mode_name].sort(key=lambda e: e["score"], reverse=True)
+        self.leaderboard[mode_name] = self.leaderboard[mode_name][:10]
         self.save_leaderboard()
 
     # -------------
@@ -534,6 +545,8 @@ class HandGestureBattleGame:
         self.fruit_hand_up = False
         self.fruit_waiting_reset = False
         self.fruit_mode_waiting_reset = False
+        self.fruit_finger_stable = False
+        self.fruit_current_finger = 0
 
     def trigger_game_over(self, frame_bgr):
         """
@@ -562,7 +575,7 @@ class HandGestureBattleGame:
         self.snapshot_file = snapshot_filename
 
         # Update leaderboard
-        self.add_to_leaderboard(self.score, snapshot_filename)
+        self.add_to_leaderboard(self.score, snapshot_filename, self.current_game_mode_name)
 
     # -------------
     # Main Loop
@@ -615,6 +628,8 @@ class HandGestureBattleGame:
                         self.fruit_finger_count = finger_info["finger_count"]
                         self.math_finger_stable = finger_info.get("stable", False)
                         self.math_current_finger = finger_info.get("current_count", finger_info["finger_count"])
+                        self.fruit_finger_stable = finger_info.get("stable", False)
+                        self.fruit_current_finger = finger_info.get("current_count", finger_info["finger_count"])
 
             if self.state == "MODE_SELECT":
                 self.update_mode_select_state()
@@ -669,6 +684,7 @@ class HandGestureBattleGame:
             if self.math_finger_count == 1:
                 self.state = "START"
             elif self.math_finger_count == 2:
+                self.current_game_mode_name = "Math Game"
                 self.state = "MATH_START"
             elif self.math_finger_count == 3:
                 self.state = "FRUIT_MODE_SELECT"
@@ -676,13 +692,24 @@ class HandGestureBattleGame:
 
     def update_start_state(self, hands_info):
         """
-        START state: wait for the player to show SCISSORS gesture
-        to begin the game.
+        START state: wait for the player to show gesture
+        - SCISSORS: enter normal battle mode
+        - ROCK: enter bully mode
         """
         for hand in hands_info:
             if hand["gesture"] == "scissors":
+                self.bully_mode = False
+                self.current_game_mode_name = "Normal Battle"
                 self.state = "READY"
-                self.ready_start_time = time.time() # 记录开始时间
+                self.ready_start_time = time.time()
+                print("Normal Battle Mode selected")
+                break
+            elif hand["gesture"] == "rock":
+                self.bully_mode = True
+                self.current_game_mode_name = "Bully Mode"
+                self.state = "BULLY_READY"
+                self.ready_start_time = time.time()
+                print("Bully Mode selected")
                 break
 
     def update_ready_state(self):
@@ -872,11 +899,13 @@ class HandGestureBattleGame:
         if self.fruit_hand_up:
             if self.fruit_finger_count == 1:
                 self.fruit_game_mode = 1  # 普通模式
+                self.current_game_mode_name = "Fruit Game (Normal)"
                 print("Selected: Normal Mode (5 questions, 2 fruit types)")
                 self.fruit_mode_waiting_reset = True
                 self.state = "FRUIT_START"
             elif self.fruit_finger_count == 2:
                 self.fruit_game_mode = 2  # 挑战模式
+                self.current_game_mode_name = "Fruit Game (Challenge)"
                 print("Selected: Challenge Mode (Difficulty increases, one mistake = game over)")
                 self.fruit_mode_waiting_reset = True
                 self.state = "FRUIT_START"
@@ -954,51 +983,53 @@ class HandGestureBattleGame:
                 print("Gesture reset, ready for next answer")
             return
         
-        # 检查答案（必须检测到手才判断，答案可以是0）
-        if self.fruit_hand_up and self.fruit_finger_count == self.fruit_answer:
-            self.fruit_correct_count += 1
-            if self.fruit_game_mode == 2:
-                self.fruit_consecutive_correct += 1
-            print(f"Correct! There are {self.fruit_answer} {self.fruit_target}s")
-            self.fruit_question_num += 1
-            self.fruit_waiting_reset = True  # 需要手势复位
-            
-            # 挑战模式：每3题正确增加一种水果
-            if self.fruit_game_mode == 2:
-                if self.fruit_consecutive_correct > 0 and self.fruit_consecutive_correct % 3 == 0:
-                    if self.fruit_num_types < 6:
-                        self.fruit_num_types += 1
-                        print(f"Difficulty increased! Now {self.fruit_num_types} fruit types")
-            
-            # 检查是否达到上限
-            max_q = self.fruit_total_questions if self.fruit_game_mode == 1 else self.fruit_max_questions
-            if self.fruit_question_num >= max_q:
-                self.score = self.fruit_correct_count
-                self.trigger_game_over(frame_bgr)
-            else:
-                self.generate_fruit_question()
-                self.fruit_question_time = time.time()
-                self.state = "FRUIT_DISPLAY"
-        
-        elif self.fruit_hand_up and self.fruit_finger_count != self.fruit_answer:
-            # 错误答案：立即判断
-            print(f"Wrong! There were {self.fruit_answer} {self.fruit_target}s, not {self.fruit_finger_count}")
-            
-            if self.fruit_game_mode == 1:
-                # 普通模式：继续下一题
+        # 只有当手指数量稳定（连续4帧相同）时才判断答案
+        if self.fruit_hand_up and self.fruit_finger_stable:
+            if self.fruit_finger_count == self.fruit_answer:
+                # 正确答案
+                self.fruit_correct_count += 1
+                if self.fruit_game_mode == 2:
+                    self.fruit_consecutive_correct += 1
+                print(f"Correct! There are {self.fruit_answer} {self.fruit_target}s")
                 self.fruit_question_num += 1
-                if self.fruit_question_num >= self.fruit_total_questions:
+                self.fruit_waiting_reset = True  # 需要手势复位
+                
+                # 挑战模式：每3题正确增加一种水果
+                if self.fruit_game_mode == 2:
+                    if self.fruit_consecutive_correct > 0 and self.fruit_consecutive_correct % 3 == 0:
+                        if self.fruit_num_types < 6:
+                            self.fruit_num_types += 1
+                            print(f"Difficulty increased! Now {self.fruit_num_types} fruit types")
+                
+                # 检查是否达到上限
+                max_q = self.fruit_total_questions if self.fruit_game_mode == 1 else self.fruit_max_questions
+                if self.fruit_question_num >= max_q:
                     self.score = self.fruit_correct_count
                     self.trigger_game_over(frame_bgr)
                 else:
                     self.generate_fruit_question()
                     self.fruit_question_time = time.time()
                     self.state = "FRUIT_DISPLAY"
+            
             else:
-                # 挑战模式：失败退出
-                print("Game Over! One mistake and you're out.")
-                self.score = self.fruit_correct_count
-                self.trigger_game_over(frame_bgr)
+                # 错误答案：立即判断
+                print(f"Wrong! There were {self.fruit_answer} {self.fruit_target}s, not {self.fruit_finger_count}")
+                
+                if self.fruit_game_mode == 1:
+                    # 普通模式：继续下一题
+                    self.fruit_question_num += 1
+                    if self.fruit_question_num >= self.fruit_total_questions:
+                        self.score = self.fruit_correct_count
+                        self.trigger_game_over(frame_bgr)
+                    else:
+                        self.generate_fruit_question()
+                        self.fruit_question_time = time.time()
+                        self.state = "FRUIT_DISPLAY"
+                else:
+                    # 挑战模式：失败退出
+                    print("Game Over! One mistake and you're out.")
+                    self.score = self.fruit_correct_count
+                    self.trigger_game_over(frame_bgr)
         
         elif now - self.fruit_question_time > self.fruit_answer_time:
             print(f"Timeout! There were {self.fruit_answer} {self.fruit_target}s")
@@ -1386,7 +1417,7 @@ class HandGestureBattleGame:
         
         question_text = f"How many {self.fruit_target}s were there?"
         question = self.big_font.render(question_text, True, (255, 255, 255))
-        question_rect = question.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 60))
+        question_rect = question.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 80))
         self.screen.blit(question, question_rect)
         
         elapsed = time.time() - self.fruit_question_time
@@ -1395,15 +1426,31 @@ class HandGestureBattleGame:
         timer_rect = timer.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 30))
         self.screen.blit(timer, timer_rect)
         
+        # 显示当前检测到的手指数和稳定状态
         if self.fruit_hand_up:
-            finger_text = self.font.render(f"Fingers: {self.fruit_finger_count}", True, (255, 255, 255))
+            if self.fruit_finger_stable:
+                # 稳定：显示绿色确认标记
+                finger_text = self.font.render(f"Fingers: {self.fruit_finger_count} ✓", True, (100, 255, 100))
+                stable_text = self.font.render("Confirmed!", True, (100, 255, 100))
+            else:
+                # 不稳定：显示当前检测到的数量（黄色）
+                finger_text = self.font.render(f"Detecting: {self.fruit_current_finger}", True, (255, 255, 0))
+                stable_text = self.font.render("Hold steady...", True, (255, 255, 0))
         else:
             finger_text = self.font.render("Fingers: Show your hand", True, (150, 150, 150))
-        finger_rect = finger_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 20))
+            stable_text = self.font.render("", True, (150, 150, 150))
+        
+        finger_rect = finger_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
         self.screen.blit(finger_text, finger_rect)
+        
+        stable_rect = stable_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 30))
+        self.screen.blit(stable_text, stable_rect)
         
         # 显示复位提示
         if self.fruit_waiting_reset:
+            reset_hint = self.font.render("Put your hand down to continue", True, (255, 255, 0))
+            reset_rect = reset_hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 60))
+            self.screen.blit(reset_hint, reset_rect)
             reset_hint = self.font.render("Put your hand down to continue", True, (255, 255, 0))
             reset_rect = reset_hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 60))
             self.screen.blit(reset_hint, reset_rect)
@@ -1479,12 +1526,18 @@ class HandGestureBattleGame:
         title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 40))
         self.screen.blit(title, title_rect)
 
-        # 2. 分数 (Y=80)
+        # 2. 模式名称 (Y=70)
+        if self.current_game_mode_name:
+            mode_text = self.font.render(f"Mode: {self.current_game_mode_name}", True, (255, 200, 100))
+            mode_rect = mode_text.get_rect(center=(WINDOW_WIDTH // 2, 70))
+            self.screen.blit(mode_text, mode_rect)
+
+        # 3. 分数 (Y=100)
         final_score = self.font.render(f"Your Score: {self.score}", True, (255, 255, 255))
-        final_score_rect = final_score.get_rect(center=(WINDOW_WIDTH // 2, 80))
+        final_score_rect = final_score.get_rect(center=(WINDOW_WIDTH // 2, 100))
         self.screen.blit(final_score, final_score_rect)
 
-        # 3. 截图缩略图 (中心 Y=200，图片高度约 150px，底部约 275)
+        # 4. 截图缩略图 (中心 Y=200，图片高度约 150px，底部约 275)
         if self.snapshot_surface is not None:
             thumb_width = 200
             thumb_height = int(thumb_width * WINDOW_HEIGHT / WINDOW_WIDTH)
@@ -1492,19 +1545,28 @@ class HandGestureBattleGame:
             thumb_rect = thumb.get_rect(center=(WINDOW_WIDTH // 2, 200))
             self.screen.blit(thumb, thumb_rect)
 
-        # 4. 排行榜 (Y=290 开始)
-        lb_title = self.font.render("Leaderboard (Top 5)", True, (255, 255, 0))
+        # 5. 排行榜 (Y=290 开始)
+        mode_leaderboard = []
+        if self.current_game_mode_name and self.current_game_mode_name in self.leaderboard:
+            mode_leaderboard = self.leaderboard[self.current_game_mode_name]
+        
+        lb_title = self.font.render(f"Leaderboard - {self.current_game_mode_name or 'Unknown'} (Top 5)", True, (255, 255, 0))
         lb_title_rect = lb_title.get_rect(center=(WINDOW_WIDTH // 2, 290))
         self.screen.blit(lb_title, lb_title_rect)
 
         y_start = 320 # 排行榜列表起始位置
-        for i, entry in enumerate(self.leaderboard[:5]):
-            line = f"{i + 1}. {entry.get('name', 'Player')} - {entry.get('score', 0)}"
-            text = self.font.render(line, True, (255, 255, 255))
-            text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, y_start + i * 25))
-            self.screen.blit(text, text_rect)
+        if mode_leaderboard:
+            for i, entry in enumerate(mode_leaderboard[:5]):
+                line = f"{i + 1}. {entry.get('name', 'Player')} - {entry.get('score', 0)}"
+                text = self.font.render(line, True, (255, 255, 255))
+                text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, y_start + i * 25))
+                self.screen.blit(text, text_rect)
+        else:
+            no_data = self.font.render("No records yet", True, (150, 150, 150))
+            no_data_rect = no_data.get_rect(center=(WINDOW_WIDTH // 2, y_start))
+            self.screen.blit(no_data, no_data_rect)
 
-        # 5. 底部提示
+        # 6. 底部提示
         instr = self.font.render("Press SPACE to restart, ESC to quit.", True, (255, 255, 255))
         instr_rect = instr.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 30))
         self.screen.blit(instr, instr_rect)
